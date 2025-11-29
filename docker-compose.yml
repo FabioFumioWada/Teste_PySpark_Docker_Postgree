@@ -1,0 +1,98 @@
+version: "3.8"
+
+services:
+  # -------------------------------------------------------------------
+  # 1. PostgreSQL (Fonte de Dados - ERP Northwind)
+  # -------------------------------------------------------------------
+  postgres_erp:
+    image: postgres:15-alpine
+    container_name: postgres_erp
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: northwind
+    ports:
+      - "5432:5432"
+    volumes:
+      # Monta o script de inicialização do Northwind
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d northwind"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------
+  # 2. Apache Spark Master
+  # -------------------------------------------------------------------
+  spark-master:
+    image: bitnami/spark:3.3.4
+    container_name: spark-master
+    restart: always
+    ports:
+      - "8080:8080" # Web UI do Master
+      - "7077:7077" # Porta de comunicação
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "false"
+      SPARK_RPC_ENCRYPTION_ENABLED: "false"
+      SPARK_SECRET_KEY: "secret"
+      SPARK_LOCAL_IP: spark-master
+      SPARK_MASTER_PORT: 7077
+      SPARK_MASTER_WEBUI_PORT: 8080
+    volumes:
+      # Monta o diretório de dados para o Data Lake (Iceberg)
+      - ./data_lake:/opt/bitnami/spark/data_lake
+      # Monta o diretório de scripts PySpark
+      - ./scripts:/opt/bitnami/spark/scripts
+      - ./spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      # Monta o diretório de dependências (JARs)
+      - ./jars:/opt/bitnami/spark/jars
+
+  # -------------------------------------------------------------------
+  # 3. Apache Spark Worker
+  # -------------------------------------------------------------------
+  spark-worker:
+    image: bitnami/spark:3.3.4
+    container_name: spark-worker
+    restart: always
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_MEMORY: 1g
+      SPARK_RPC_AUTHENTICATION_ENABLED: "false"
+      SPARK_RPC_ENCRYPTION_ENABLED: "false"
+      SPARK_SECRET_KEY: "secret"
+      SPARK_LOCAL_IP: spark-worker
+    volumes:
+      - ./data_lake:/opt/bitnami/spark/data_lake
+      - ./scripts:/opt/bitnami/spark/scripts
+      - ./spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./jars:/opt/bitnami/spark/jars
+
+  # -------------------------------------------------------------------
+  # 4. Spark History Server
+  # -------------------------------------------------------------------
+  spark-history-server:
+    image: bitnami/spark:3.3.4
+    container_name: spark-history-server
+    restart: always
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: history
+      SPARK_HISTORY_OPTS: "-Dspark.history.fs.logDirectory=/opt/bitnami/spark/data_lake/spark-events"
+    ports:
+      - "18080:18080" # Web UI do History Server
+    volumes:
+      # Diretório para logs de eventos do Spark
+      - ./data_lake/spark-events:/opt/bitnami/spark/data_lake/spark-events
+      # Monta o diretório de scripts PySpark
+      - ./scripts:/opt/bitnami/spark/scripts
+      - ./spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      # Monta o diretório de dependências (JARs)
+      - ./jars:/opt/bitnami/spark/jars
